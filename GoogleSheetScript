@@ -1,0 +1,330 @@
+/*
+Denne koden er utarbeida av Ingeborg Altern i august 2020. Den brukes for å importerer brukere til Google Suite. 
+Google Suite er satt opp med Custom attributes, bl.a. foresattes navn og kontaktinformasjon. Gangen er som følger:
+1. Foresatte fyller ut et innmeldingsskjema. Svarene sendes til Google sheet-fila, der denne koden ligger. Fila inneholder også et ark som heter log.
+2. En trigger knyttet til nye svar på skjemaet får finnNyRad til å kjøres. Har satt opp umiddelbart varsel om at koden ikke funka.
+3. Den funksjonen setter i gang addUserInnmeldt som:
+   A) legger inn brukeren i rett organisasjonsenhet i G Suite
+   B) legger inn foresattes epostadresse i en epostliste (Google Group)
+   
+Manifestet skal se slik ut (View > Show manifest file):
+{
+  "timeZone": "Europe/Paris",
+  "dependencies": {
+    "enabledAdvancedServices": [{
+      "userSymbol": "AdminDirectory",
+      "serviceId": "admin",
+      "version": "directory_v1"
+    }]
+  },
+  "exceptionLogging": "STACKDRIVER",
+  "runtimeVersion": "V8"
+}  
+*/
+
+function finnNyRad() {
+/*loggfør at koden kjøres */  
+  var timezone = "GMT+2";
+  var timestamp_format = "dd.MM.yy HH:mm:ss";
+  var date = Utilities.formatDate(new Date(), timezone, timestamp_format);
+  log("skriptet ble kjørt",date);
+  var sheet = SpreadsheetApp.getActive().getSheetByName('log');
+  var rangeData = sheet.getDataRange();  
+  //log(rangeData.getA1Notation());
+  var lastRow = rangeData.getLastRow();
+  var sisteRad = sheet.getRange(lastRow,1,1,2); //startrad, startkolonne, antall rader, antall kolonner
+  //log(sisteCelle.getA1Notation());
+  sisteRad.setBackground("yellow").setFontWeight("bold");
+  
+/*Finn raden med nyeeste innmelding(er)*/
+  var sheet = SpreadsheetApp.getActive().getSheetByName('innmeldinger');
+  var rangeData = sheet.getDataRange();  
+  //log(rangeData.getA1Notation());
+  var lastColumn = rangeData.getLastColumn();
+  var lastRow = rangeData.getLastRow();
+  var sisteKolonne = sheet.getRange(1,lastColumn,lastRow); //startrad, startkolonne, antall rader, antall kolonner
+  var values = sisteKolonne.getValues();
+  
+  /*Finn føreste rad som er uten verdi i kolonnen. Formater datoene til tekststregn */
+  for (var i = 0; i < values.length; i++) {
+    if(values[i][0]=="" || values[i][0]==null){
+      var innmeldingsrad = sheet.getRange(i+1,1,1,lastColumn);
+      var adresse = innmeldingsrad.getA1Notation();
+      Logger.log("Raden er " + adresse);
+      log('Raden er ', adresse);
+      var radnr = i+1;
+      var id = 720+radnr; //Våre brukte id'er går opp til nesten 720
+      log('id er',id);
+      sheet.getRange(radnr,lastColumn-3).setFormula("=TEXT(A"+radnr+",\"YYYY-MM-DD\")");
+      sheet.getRange(radnr,lastColumn-2).setFormula("=TEXT(E"+radnr+",\"YYYY-MM-DD\")");
+      addUserInnmeldt(innmeldingsrad); //kjør den andre funksjonen
+      sheet.getRange(i+1,lastColumn-1).setValue(id); //sett inn id i nest siste kolonne, markerer at denne raden er håndtert
+    }//if
+  }//for
+};//funksjone
+
+function addUserInnmeldt(innmeldingsrad) {
+/*hent hvilken rad koden skal behandles fra forrige funkjson
+Hent verdiene i denne raden. 
+Gjør om på verdigene for å passe til importen til G Suite */
+  
+  var verdier = innmeldingsrad.getValues();
+  
+  var fornavn = verdier[0][1];
+  var mellomnavn = verdier[0][2];
+  var etternavn = verdier[0][3];
+  var fmnavn = fornavn + ' ' + mellomnavn;
+  if (mellomnavn == '') {
+    var fornavn = fornavn;
+  }
+  else {
+    var fornavn = fornavn + '.' + mellomnavn;
+  }
+  log('fornavn', fornavn);
+  var epost = fornavn + '.' + etternavn;// 
+  var epost = epost.replace(/ø/gi,'o'); // i regex er /g global, dvs alle tilfeller erstattes, ikke bare første. i = ignorer case
+  var epost = epost.replace(/æ/gi,'ae');
+  var epost = epost.replace(/\./g,'XXX'); //ta vare på punktum mellom navn
+  var epost = epost.replace(/\-/g,'ZZZ'); //ta vare på bindestrek i navn
+  //log('epost før normalisering', epost);
+  var epost = epost.normalize('NFKD').replace(/[^\w]/gi, ''); //denne klarer ikke ø og æ. Fjerner også mellomrom.
+  var epost = epost.replace(/\XXX/g,'.');
+  var epost = epost.replace(/\ZZZ/g,'-');
+  var epost = epost + '@askerspeiderne.no';
+  //log('epost etter halen', epost);
+    
+  var innmeldingsdatoen = verdier[0][34];
+  log("innmeldt dato", innmeldingsdatoen);
+  var kjonn = verdier[0][5];
+  var hensynet = verdier[0][6];
+  var skolen = verdier[0][7];
+  var trinn = verdier[0][8];
+  log("trinn ", trinn);
+  
+  //finn riktig gren og tropp
+  if(trinn>5){
+    var grad = "3";
+    var gren = "Vandrere";
+    if(kjonn == "female"){
+      var tropp = "vandrerjenter";
+    }
+    else{
+      var tropp = "vandrergutter";
+    }
+  }
+  else { //hvis trinnverdien ikke er høyere enn 5
+    var gren = "Stifinnere";
+    if(kjonn == "female"){
+      var tropp = "stifinnerjenter";
+    }
+    else{
+      var tropp = "stifinnergutter";
+    }  
+  } //slutt på if trinn
+
+  var dato = verdier[0][35];
+  var mobil = (verdier[0][9]);
+  var epostPriv = verdier[0][10];
+  var adr = verdier[0][11];
+  var adr2 = verdier[0][13];
+  var postnr = verdier[0][12];
+  
+  /*foresatte */
+  var navn1 = verdier[0][14];
+  var mobil1 = verdier[0][16];
+  var epost1 = verdier[0][15];
+  var navn2 = verdier[0][18];
+  var mobil2 = String(verdier[0][20]);
+  var epost2 = verdier[0][19];
+  var navn3 = verdier[0][22];
+  var epost3 = verdier[0][23];
+  var mobil3 = String(verdier[0][24]);
+  var navn4 = verdier[0][26];
+  var epost4 = verdier[0][27];
+  var mobil4 = String(verdier[0][28]);
+  var epostForesatt = "{value:"+ epost1+"}"; 
+  if (epost2 != '') { //hvis epost2 er ikke tom
+    var epostForesatt = epostForesatt + ",{value:"+ epost2+"}"; 
+  }
+  if (epost3 != '') {
+    var epostForesatt = epostForesatt + ",{value:"+ epost3+"}"; 
+  }
+  if (epost4 != '') {
+    var epostForesatt = epostForesatt + ",{value:"+ epost4+"}"; 
+  }
+  
+  var hjelpen = verdier[0][29]; 
+  var testen = verdier[0][31];
+  var merknaden = verdier[0][30];
+  var bildet = verdier[0][32];
+  var samtykket = verdier[0][33];
+
+  var passord = epost.slice(0, 2) + "_" + dato;
+  log('passord', passord);
+  
+  log('epost før user', epost);
+  log('fornavn mellomnavn før user', fmnavn);
+  log('etternavn før user',etternavn);
+    
+  log('tropp',tropp)
+  log('grad',grad)
+  log('innmeldingsdatoen',innmeldingsdatoen)
+//  log('kjonn',kjonn)
+//  log('hensynet',hensynet)
+//  log('skolen',skolen)
+//  log('dato',dato)
+//  log('mobil',mobil)
+//  log('epostPriv',epostPriv)
+//  log('adr',adr)
+//  log('adr2',adr2)
+//  log('postnr',postnr)
+//  log('navn1',navn1)
+//  log('mobil1',mobil1)
+//  log('epost1',epost1)
+//  log('navn2',navn2)
+//  log('mobil2',mobil2)
+//  log('epost2',epost2)
+//  log('hjelpen',hjelpen)
+//  log('testen',testen)
+//  log('merknaden',merknaden)
+//  log('bildet',bildet)
+//  log('samtykket',samtykket)
+  
+  var eposten = [epost1,epost2,epost3,epost4]; // gjør alle foresatt-adressene om til matrise
+  Logger.log("epostmatrise " + eposten);
+  log('epostmatrise', ''+eposten);
+
+  /* Nå som alle dataene er hentet fram og lagt i variabler skal de importeres i G suite. All infomrasjonen legges inn i ny variabel.
+  Det hender at noen epostadresser feiler, usikker på hvorfor. Kan ha vært skjulte tegn i strengen.*/
+  var user = {
+      primaryEmail: epost,
+      name: {
+        givenName: fmnavn,
+        familyName: etternavn
+      },
+     
+      addresses: [
+        {
+        type: "home",
+        formatted: adr
+        },
+        {
+        type: "other",
+        formatted: adr2
+        },
+	    {
+        type: "home",
+        postalCode: postnr
+        }	
+      ],
+      phones: [
+        {
+          value: mobil,
+          type: "home"
+        }
+      ],
+      emails: [
+        {
+          address: epostPriv,
+          type: "home"
+        }
+      ],
+      recoveryEmail: epost1,
+      locations: [
+        {
+          floorName: grad,
+          type: "desk",
+          area: "desk"
+        }
+      ], 
+      gender: {
+        type: kjonn
+      },
+      
+     orgUnitPath: "/Speidere/"+gren+"/"+tropp,
+  
+     customSchemas: { //de attributtene jeg har definert i G Suite selv
+        Personlig_informasjon: {
+          skole: skolen,
+          hensyn: hensynet,
+         bursdag: dato
+        },
+       Innmeldingssvar: {
+          hjelpe_til: hjelpen,
+          teste: testen,
+          merknad: merknaden,
+          bilde: bildet,
+          samtykke: samtykket,
+          innmeldingsdato: innmeldingsdatoen
+        },	
+        Foresatt: {
+          foresatt_navn: [
+            {
+              value: navn1
+            },
+            {
+              value: navn2,
+            },
+            {
+              value: navn3
+            },
+            {
+              value: navn4
+            }
+           
+          ],
+          foresatt_epost: [epostForesatt],
+          foresatt_mob: [
+            {
+              value: mobil1
+            },
+            {
+              value: mobil2
+            },
+            {
+              value: mobil3
+            },
+            {
+              value: mobil4
+            }
+          ]
+        },//foresatt
+      },//CustomSchemas
+     password: passord
+    }; //var user 
+
+  user = AdminDirectory.Users.insert(user); //for at denne AdminDir skal fungere må json legges til. View > show Manifest.
+  var googleID = user.id;//bruker-id i G Suite
+  Logger.log('User %s created with ID %s.', user.primaryEmail, user.id);
+  log('User %s created with ID %s.', user.primaryEmail, googleID);
+
+/* Legg foresattes epostadresse til riktig epostliste (group).
+Sett sammen listenavnet der foresatte skal legges til med 'tropp'-verdien */
+var groupId = tropp + "-foresatte@askerspeiderne.no";
+log("gruppe id ",groupId);
+var group = GroupsApp.getGroupByEmail(groupId);
+log('epostmatrise', ''+eposten);
+eposten = eposten.filter(item => item);//fjerner tomme verdier fra matrisen (array)
+log('epostmatrise', ''+eposten);
+
+/* Legg til foresatte i epostlisten, ev av gangen. Mulig det bør legges til en SLEEP her */
+for (j = 0; j < eposten.length; j++) {
+  var userEmail = eposten[j];
+  var newMember = {email: userEmail, role: "MEMBER"};
+  if(group.hasUser(userEmail)==false){
+    log("nr i matriesen ",j);
+    log("eposten ",userEmail);
+    AdminDirectory.Members.insert(newMember, groupId);
+  }//hasUser
+}// j
+
+/*Sett inn google-id i regnearket. Markerer at raden er blitt behandla*/
+var adressen = innmeldingsrad.getA1Notation();
+var sisteCelle = adressen.slice(3,6);
+log("adressen", sisteCelle);
+SpreadsheetApp.getActive().getSheetByName('innmeldinger').getRange(sisteCelle).setValue(googleID);
+  
+}//function
+const log=(...items)=>{
+    SpreadsheetApp.getActive().getSheetByName("log").appendRow(items);
+};
